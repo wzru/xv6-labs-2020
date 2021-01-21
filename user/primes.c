@@ -2,42 +2,35 @@
 #include "user/user.h"
 
 #define MAXN 35
-#define BUF_SIZE 128
 
-// int is_prime(int x) {
-//   if (x <= 1)
-//     return 0;
-//   for (int i = 2; i < x; ++i)
-//     if (x % i == 0)
-//       return 0;
-//   return 1;
-// }
-
-int main(int argc, char **argv) {
-  int fd[MAXN][2];
-  int cnt = 0, p, n;
-  pipe(fd[0]);
-  for (int i = 2; i <= MAXN; ++i)
-    write(fd[0][1], &i, sizeof(int));
-  close(fd[0][1]);
-  while (read(fd[cnt][0], &p, sizeof(int))) {
+void sieve(int input) {
+  int n, p, fd[2];
+  if (read(input, &p, sizeof(int)) > 0) {
     fprintf(1, "prime %d\n", p);
-    pipe(fd[++cnt]);
+    pipe(fd);
     if (fork() == 0) {
-      while (read(fd[cnt - 1][0], &n, sizeof(int)) > 0) {
-        if (n % p != 0) {
-          //   fprintf(1, "n=%d\n", n);
-          write(fd[cnt][1], &n, sizeof(int));
-        }
-      }
-      close(fd[cnt - 1][0]);
-      close(fd[cnt][1]);
-      exit(0);
+      close(fd[1]);
+      sieve(fd[0]);
     } else {
+      close(fd[0]);
+      while (read(input, &n, sizeof(int)) > 0) {
+        if (n % p != 0)
+          write(fd[1], &n, sizeof(int));
+      }
+      close(fd[1]);
+      close(input);
       int res;
       wait(&res);
-      close(fd[cnt][1]); // important
     }
   }
+}
+
+int main(int argc, char **argv) {
+  int fd[2];
+  pipe(fd);
+  for (int i = 2; i <= MAXN; ++i)
+    write(fd[1], &i, sizeof(int));
+  close(fd[1]);
+  sieve(fd[0]);
   exit(0);
 }
