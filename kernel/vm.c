@@ -18,33 +18,72 @@ extern char trampoline[]; // trampoline.S
 /*
  * create a direct-map page table for the kernel.
  */
-void
+pagetable_t
 kvminit()
 {
-  kernel_pagetable = (pagetable_t) kalloc();
-  memset(kernel_pagetable, 0, PGSIZE);
+  pagetable_t kpt = (pagetable_t) kalloc();
+  // printf("kpt=%p\n", kpt);
+  memset(kpt, 0, PGSIZE);
 
   // uart registers
-  kvmmap(UART0, UART0, PGSIZE, PTE_R | PTE_W);
+  mappages(kpt, UART0, PGSIZE, UART0, PTE_R | PTE_W);
+  // kvmmap(UART0, UART0, PGSIZE, PTE_R | PTE_W);
 
   // virtio mmio disk interface
-  kvmmap(VIRTIO0, VIRTIO0, PGSIZE, PTE_R | PTE_W);
+  mappages(kpt, VIRTIO0, PGSIZE, VIRTIO0, PTE_R | PTE_W);
+  // kvmmap(VIRTIO0, VIRTIO0, PGSIZE, PTE_R | PTE_W);
 
   // CLINT
-  kvmmap(CLINT, CLINT, 0x10000, PTE_R | PTE_W);
+  mappages(kpt, CLINT, 0x10000, CLINT, PTE_R | PTE_W);
+  // kvmmap(CLINT, CLINT, 0x10000, PTE_R | PTE_W);
 
   // PLIC
-  kvmmap(PLIC, PLIC, 0x400000, PTE_R | PTE_W);
+  mappages(kpt, PLIC, 0x400000, PLIC, PTE_R | PTE_W);
+  // kvmmap(PLIC, PLIC, 0x400000, PTE_R | PTE_W);
 
   // map kernel text executable and read-only.
-  kvmmap(KERNBASE, KERNBASE, (uint64)etext-KERNBASE, PTE_R | PTE_X);
+  mappages(kpt, KERNBASE, (uint64)etext-KERNBASE, KERNBASE, PTE_R | PTE_X);
+  // kvmmap(KERNBASE, KERNBASE, (uint64)etext-KERNBASE, PTE_R | PTE_X);
 
   // map kernel data and the physical RAM we'll make use of.
-  kvmmap((uint64)etext, (uint64)etext, PHYSTOP-(uint64)etext, PTE_R | PTE_W);
+  mappages(kpt, (uint64)etext, PHYSTOP-(uint64)etext, (uint64)etext, PTE_R | PTE_W);
+  // kvmmap((uint64)etext, (uint64)etext, PHYSTOP-(uint64)etext, PTE_R | PTE_W);
 
   // map the trampoline for trap entry/exit to
   // the highest virtual address in the kernel.
-  kvmmap(TRAMPOLINE, (uint64)trampoline, PGSIZE, PTE_R | PTE_X);
+  mappages(kpt, TRAMPOLINE, PGSIZE, (uint64)trampoline, PTE_R | PTE_X);
+  // kvmmap(TRAMPOLINE, (uint64)trampoline, PGSIZE, PTE_R | PTE_X);
+
+  return kpt;
+}
+
+/*
+ * free a direct-map page table for the kernel.
+ */
+void
+kvmfree(pagetable_t kpt)
+{
+  // uart registers
+  uvmunmap(kpt, UART0, 1, 0);
+
+  // virtio mmio disk interface
+  uvmunmap(kpt, VIRTIO0, 1, 0);
+
+  // CLINT
+  uvmunmap(kpt, CLINT, 0x10000/PGSIZE, 0);
+
+  // PLIC
+  uvmunmap(kpt, PLIC, 0x400000/PGSIZE, 0);
+
+  // map kernel text executable and read-only.
+  uvmunmap(kpt, KERNBASE, ((uint64)etext-KERNBASE)/PGSIZE, 0);
+
+  // map kernel data and the physical RAM we'll make use of.
+  uvmunmap(kpt, (uint64)etext, (PHYSTOP-(uint64)etext)/PGSIZE, 0);
+
+  // map the trampoline for trap entry/exit to
+  // the highest virtual address in the kernel.
+  uvmunmap(kpt, TRAMPOLINE, 1, 0);
 }
 
 // Switch h/w page table register to the kernel's page table,
@@ -320,10 +359,13 @@ uvmcopy(pagetable_t old, pagetable_t new, uint64 sz)
       panic("uvmcopy: page not present");
     pa = PTE2PA(*pte);
     flags = PTE_FLAGS(*pte);
-    if((mem = kalloc()) == 0)
+    if((mem = kalloc()) == 0) {
+      // printf("uvmcopy kalloc failed----\n");
       goto err;
+    }
     memmove(mem, (char*)pa, PGSIZE);
     if(mappages(new, i, PGSIZE, (uint64)mem, flags) != 0){
+      // printf("uvmcopy mappages failed----\n");
       kfree(mem);
       goto err;
     }
@@ -443,6 +485,7 @@ copyinstr(pagetable_t pagetable, char *dst, uint64 srcva, uint64 max)
 
 void
 vmprint(pagetable_t pt) {
+  // return;
   printf("page table %p\n", pt);
   for(int i=0; i<512; ++i) {
     pte_t pte1 = pt[i];

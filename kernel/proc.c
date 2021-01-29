@@ -34,11 +34,11 @@ procinit(void)
       // Allocate a page for the process's kernel stack.
       // Map it high in memory, followed by an invalid
       // guard page.
-      char *pa = kalloc();
-      if(pa == 0)
-        panic("kalloc");
+      // char *pa = kalloc();
+      // if(pa == 0)
+      //   panic("kalloc");
       uint64 va = KSTACK((int) (p - proc));
-      kvmmap(va, (uint64)pa, PGSIZE, PTE_R | PTE_W);
+      // kvmmap(va, (uint64)pa, PGSIZE, PTE_R | PTE_W);
       p->kstack = va;
   }
   kvminithart();
@@ -121,6 +121,18 @@ found:
     return 0;
   }
 
+  p->kpagetable = kvminit();
+  if(p->kpagetable == 0) {
+    freeproc(p);
+    release(&p->lock);
+    return 0;
+  }
+
+  char *pa = kalloc();
+  // p->kstack_pa = (uint64) pa;
+  mappages(p->kpagetable, p->kstack, PGSIZE, (uint64)pa, PTE_R | PTE_W);
+  mappages(kernel_pagetable, p->kstack, PGSIZE, (uint64)pa, PTE_R | PTE_W);
+
   // Set up new context to start executing at forkret,
   // which returns to user space.
   memset(&p->context, 0, sizeof(p->context));
@@ -141,6 +153,14 @@ freeproc(struct proc *p)
   p->trapframe = 0;
   if(p->pagetable)
     proc_freepagetable(p->pagetable, p->sz);
+  kfree((void *)kvmpa(p->kstack));
+  uvmunmap(kernel_pagetable, p->kstack, 1, 0);
+  uvmunmap(p->kpagetable, p->kstack, 1, 0);
+  if(p->kpagetable) {
+    kvmfree(p->kpagetable);
+    freewalk(p->kpagetable);
+  }
+  // kfree((void *)p->kstack_pa);
   p->pagetable = 0;
   p->sz = 0;
   p->pid = 0;
@@ -264,11 +284,13 @@ fork(void)
 
   // Allocate process.
   if((np = allocproc()) == 0){
+    // printf("allocproc failed---\n");
     return -1;
   }
 
   // Copy user memory from parent to child.
   if(uvmcopy(p->pagetable, np->pagetable, p->sz) < 0){
+    // printf("fork uvmcopy failed---\n");
     freeproc(np);
     release(&np->lock);
     return -1;
@@ -473,7 +495,10 @@ scheduler(void)
         // before jumping back to us.
         p->state = RUNNING;
         c->proc = p;
+        w_satp(MAKE_SATP(p->kpagetable));
+        sfence_vma();
         swtch(&c->context, &p->context);
+        kvminithart();
 
         // Process is done running for now.
         // It should have changed its p->state before coming back.
@@ -485,6 +510,7 @@ scheduler(void)
     }
 #if !defined (LAB_FS)
     if(found == 0) {
+      kvminithart();
       intr_on();
       asm volatile("wfi");
     }
